@@ -57,7 +57,7 @@ const daysTo = s => Math.round((new Date(s + 'T00:00:00Z') - new Date(todayIso()
 const addD = (s, n) => new Date(new Date(s + 'T00:00:00Z').getTime() + n * 864e5).toISOString().slice(0, 10);
 
 let S = clone(DEFAULT_STATE), rows = [], B = {}, cur = 0, viewIdx = null, logEdit = null, logKind = '', logDir = 'in', logMode = 'pay', spendType = 'everyday';
-let storageMode = 'loading';
+let storageMode = 'loading', armed = false;
 
 // ----- lists the set-up screens choose from -----
 const DEBT_TYPES = { card: 'Credit card', loan: 'Loan', person: 'Money owed to a person', overdraft: 'Overdraft', other: 'Other' };
@@ -86,7 +86,9 @@ const chip = a => a ? `<span class="acct a${accts().indexOf(a) % 4}">${esc(a.cod
 
 // ----- persistence: saved on this device -----
 function applyLoaded(o) {
-  S = migrate(Object.assign(clone(DEFAULT_STATE), { v: 1 }, o || {}));
+  // saved data is only 'blank' if it says so: the default's blank flag must not leak into real data
+  const base = clone(DEFAULT_STATE); delete base.blank;
+  S = migrate(Object.assign(base, { v: 1 }, o || {}));
   for (const k of ['logs', 'investValues', 'goals', 'dds', 'joint', 'sinking', 'salary', 'budget', 'investPlan', 'debts', 'pots', 'accounts', 'spend']) if (!Array.isArray(S[k])) S[k] = [];
   for (const k of ['checks', 'celebrated', 'actualPay', 'paydayOverrides', 'leftover', 'pay', 'investments']) if (!S[k] || typeof S[k] !== 'object') S[k] = {};
 }
@@ -211,11 +213,13 @@ function viewHome() {
       sub: pt.kind === 'yearly' ? `${gbp(r.O)} set aside each payday` : pt.target ? `${pct(B.pot[pt.id] / pt.target)} of ${gbp(pt.target, 0)}` : 'Waiting for a job',
       foot: pt.kind === 'yearly' ? (S.sinking.filter(s => s.active !== false && s.annual > 0).map(s => s.name).join(', ') || 'No yearly costs added') : 'Move it with a log entry' })),
   ];
-  const needBackup = !S.blank && S.logs.length && (!S.lastBackup || daysTo(S.lastBackup) < -30);
+  const needBackup = !S.blank && !S.sample && S.logs.length && (!S.lastBackup || daysTo(S.lastBackup) < -30);
   return `
   ${S.blank ? `<section class="card welcome"><h1>Welcome to Stratrix</h1><p class="muted">Your payday plan, debt countdown and savings tracker. Everything stays on this phone: nothing is sent anywhere and there’s no sign-up.</p>
-    <div class="actions left"><a class="btn" href="#manage">Set up in Manage</a><label class="btn ghost file">Restore a backup<input type="file" accept=".json,application/json" id="restore"></label></div>
+    <div class="actions left"><button class="btn" data-act="setup">Set up in 2 minutes</button><button class="btn ghost" data-act="sample">Try with sample data</button><label class="btn ghost file">Restore a backup<input type="file" accept=".json,application/json" id="restore"></label></div>
     <p class="muted small">Stratrix helps you plan and track. It isn’t financial advice.</p></section>` : ''}
+  ${S.blank ? '' : `  ${S.sample ? `<div class="note checkin"><span>You’re looking at sample data for a made-up person.</span><button class="btn" data-act="clearSample">Clear it and set up</button></div>` : ''}
+  ${nextSteps()}
   ${needBackup ? `<div class="note">It’s been a while since your last backup. <button class="linkish" data-act="backup">Download one now</button></div>` : ''}
   ${lo ? `<section class="card prompt"><p class="label">Pay period ended ${fDate(lo.r.E)}</p><h2>You had ${gbp(lo.left)} left over</h2><p class="muted small">Move it somewhere now so it doesn’t disappear into this period’s spending.</p>
     <div class="chips">${S.pots.filter(pt => pt.kind !== 'yearly').map(pt => `<button class="chip" data-leftover="pot:${pt.id}">${esc(pt.name)}</button>`).join('')}${G.filter(g => g.active !== false && g.saved < g.target).map(g => `<button class="chip" data-leftover="goal:${g.id}">${esc(g.icon || '')} ${esc(g.name)}</button>`).join('')}<button class="chip ghost" data-leftover="keep">Keep it as a buffer</button></div></section>` : ''}
@@ -261,7 +265,7 @@ function viewHome() {
     </article>`).join('')}
   </div>` : ''}
   <div class="head-row"><h2>Goals</h2><a class="btn ghost" href="#goals">Manage goals</a></div>
-  ${G.length ? `<div class="grid goals">${G.map(goalTile).join('')}</div>` : `<div class="card empty">No goals yet. <a href="#goals">Add one</a>, like a holiday or a car.</div>`}`;
+  ${G.length ? `<div class="grid goals">${G.map(goalTile).join('')}</div>` : `<div class="card empty">No goals yet. <a href="#goals">Add one</a>, like a holiday or a car.</div>`}`}`;
 }
 function goalTile(g) {
   const p = g.target ? g.saved / g.target : 0;
@@ -464,7 +468,10 @@ function viewManage() {
   <details class="card sec"><summary>Your data</summary>
     <p class="muted small">Saved on this phone only. Download a backup now and then, and keep it somewhere safe (Google Drive, or email it to yourself). Never upload it anywhere public.${S.lastBackup ? ' Last backup: ' + fDate(S.lastBackup, { day: 'numeric', month: 'short', year: 'numeric' }) + '.' : ''}</p>
     <div class="actions left"><button class="btn" data-act="export">Export to Excel</button><button class="btn ghost" data-act="backup">Download backup</button>
-    <label class="btn ghost file">Restore backup<input type="file" accept=".json,application/json" id="restore"></label></div></details>
+    <label class="btn ghost file">Restore backup<input type="file" accept=".json,application/json" id="restore"></label></div>
+    <p class="label" style="margin-top:16px">Start again</p>
+    <p class="muted small">Deletes everything in Stratrix on this phone and takes you back to the welcome screen. Download a backup first if you might want it back. Other apps aren’t affected.</p>
+    <div class="actions left"><button class="btn ghost danger" data-act="startAgain">${armed ? 'Tap again to delete everything' : 'Start again'}</button></div></details>
   <p class="muted small center">Stratrix helps you plan and track. It isn’t financial advice.</p>`;
 }
 
@@ -529,8 +536,205 @@ function exportSheets() {
   return sheets;
 }
 
+// ----- set-up wizard: five short screens that end on a filled-in dashboard -----
+// The answers build a draft (W). Nothing is saved until "Open my dashboard", so backing out leaves the app as it was.
+let W = null, wizStep = 0;
+const WIZ_STEPS = ['When are you paid?', 'How much lands in your account?', 'What bills go out?', 'Do you owe anything?', 'What are you saving for?', 'Your plan'];
+const BILL_PRESETS = ['Rent or mortgage', 'Council tax', 'Energy', 'Water', 'Phone', 'Broadband', 'Car insurance', 'Streaming', 'Gym'];
+const DEBT_PRESETS = [['Credit card', 'card'], ['Loan', 'loan'], ['Car finance', 'loan'], ['Overdraft', 'overdraft'], ['Money owed to a person', 'person']];
+const GOAL_PRESETS = [['✈️', 'Holiday'], ['🚗', 'Car'], ['🏠', 'House deposit'], ['🎁', 'Christmas'], ['💍', 'Wedding']];
+function startWizard() {
+  W = clone(DEFAULT_STATE); delete W.blank;
+  W._pay = null; W._split = false; W._banks = { salary: '', spending: '', savings: '' }; W._goals = []; W._efTouched = false;
+  wizStep = 0; location.hash = '#setup';
+}
+const monthNow = () => todayIso().slice(0, 7);
+const wMonthlyBills = () => W.dds.reduce((a, d) => a + (+d.amt || 0), 0);
+// turn the draft's answers into the saved shape (pay, accounts, goals, budget)
+function wizBuild(budget) {
+  const o = clone(W), m = monthNow();
+  o.salary = o._pay > 0 ? [{ id: uid('s'), from: m, amt: +o._pay }] : [];
+  o.simple = !o._split;
+  o.accounts = [];
+  if (o._split) {
+    const roles = {};
+    for (const [role, bank] of Object.entries(o._banks)) if (bank) (roles[bank] = roles[bank] || []).push(role);
+    if (roles[o._banks.salary]) roles[o._banks.salary].push('bills');
+    if (roles[o._banks.spending]) roles[o._banks.spending].push('shared');
+    const used = new Set();
+    o.accounts = Object.entries(roles).map(([bank, rs], i) => { let code = codeFor(bank); while (used.has(code)) code = code.slice(0, 2) + (i + 1); used.add(code); return { id: uid('a'), bank, code, roles: [...new Set(rs)] }; });
+  }
+  o.dds = o.dds.filter(d => d.name && +d.amt > 0).map(d => ({ ...d, amt: +d.amt, day: +d.day || 1, freq: 'm', active: true }));
+  o.debts = o.debts.filter(d => +d.balance > 0).map(d => ({ ...d, balance: +d.balance, min: +d.min || 0 }));
+  o.goals = o._goals.filter(g => g.name && +g.target > 0).map(g => ({ id: uid('g'), icon: g.icon, name: g.name, target: +g.target, by: g.by, active: true }));
+  if (budget != null) o.budget = [{ id: uid('b'), from: m, amt: +budget || 0 }];
+  for (const k of ['_pay', '_split', '_banks', '_goals', '_efTouched', '_budget']) delete o[k];
+  return o;
+}
+// the spending budget suggested from what's left after bills, debts, the emergency fund and goals
+function wizSuggest() {
+  const o = wizBuild(0), rs = plan(o, todayIso()), r = rs[currentIndex(rs, todayIso())];
+  return { r, left: Math.max(0, Math.floor((r.P - r.INV) / 10) * 10) };
+}
+const wIn = (path, label, type = 'number', extra = '') => {
+  const v = path.split('.').reduce((o, k) => o?.[k], W);
+  return `<label>${label}<input type="${type}" data-wbind="${path}" value="${esc(v ?? '')}" ${type === 'number' ? 'step="0.01" min="0" inputmode="decimal"' : ''} ${extra}></label>`;
+};
+const wRow = (list, i, cols) => `<div class="lrow">${cols.map(([f, l, type, extra]) => {
+  const v = W[list][i][f];
+  return type === 'select' ? `<label>${l}<select data-wlist="${list}" data-i="${i}" data-f="${f}">${extra.map(([k, t]) => `<option value="${k}" ${String(v) === k ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label>`
+    : `<label class="${f === 'name' ? 'wide' : ''}">${l}<input type="${type || 'text'}" data-wlist="${list}" data-i="${i}" data-f="${f}" value="${esc(v ?? '')}" ${type === 'number' ? 'step="0.01" min="0" inputmode="decimal"' : ''} ${extra || ''}></label>`;
+}).join('')}<button class="icon del" data-wdel="${list}:${i}" aria-label="Remove">×</button></div>`;
+function viewSetup() {
+  if (!W) startWizard();
+  const s = wizStep, freq = W.pay.freq, per = 'each payday';
+  const bankSel = role => `<select data-wbank="${role}">${bankOptions(W._banks[role])}</select>`;
+  let body = '';
+  if (s === 0) body = `
+    <div class="chips">${Object.entries(PAY_FREQS).map(([k, t]) => `<button class="chip ${freq === k ? 'on' : ''}" data-wfreq="${k}">${t}</button>`).join('')}</div>
+    <div class="fields">${freq === 'fixed' ? wIn('pay.day', 'Which day of the month?', 'number', 'step="1" min="1" max="31"') : ''}
+    ${STEP_DAYS[freq] ? wIn('pay.anchor', 'Your last or next payday', 'date') : ''}</div>
+    <p class="label">Where do you live? (for bank holidays)</p>
+    <div class="chips">${Object.entries(REGIONS).map(([k, t]) => `<button class="chip ${W.region === k ? 'on' : ''}" data-wregion="${k}">${t}</button>`).join('')}</div>
+    <p class="muted small">${freq === 'last' ? 'If the last day is a weekend or bank holiday, you’re paid the working day before.' : 'If payday falls on a weekend or bank holiday, it’s taken as the working day before.'}</p>`;
+  if (s === 1) body = `
+    <div class="fields">${wIn('_pay', 'Take-home pay ' + per + ' (after tax)')}</div>
+    <p class="label">Do you split your money across different accounts?</p>
+    <div class="seg"><button class="${W._split ? '' : 'on'}" data-wsplit="no">No, one account</button><button class="${W._split ? 'on' : ''}" data-wsplit="yes">Yes</button></div>
+    ${W._split ? `<div class="fields"><label>Pay lands in${bankSel('salary')}</label><label>You spend from${bankSel('spending')}</label><label>You save in${bankSel('savings')}</label></div>
+    <p class="muted small">Pick the same bank more than once if it does more than one job. You can add more accounts later in Manage.</p>` : '<p class="muted small">Most people start here. You can switch it on later in Manage.</p>'}`;
+  if (s === 2) body = `
+    <p class="muted small">Tap to add each one, then fill in the amount and the day it goes out.</p>
+    <div class="chips">${BILL_PRESETS.map(b => `<button class="chip ${W.dds.some(d => d.name === b) ? 'on' : ''}" data-wadd="dds:${b}">${W.dds.some(d => d.name === b) ? '✓ ' : '+ '}${b}</button>`).join('')}<button class="chip ghost" data-wadd="dds:">+ Other</button></div>
+    <div class="list">${W.dds.map((d, i) => wRow('dds', i, [['name', 'Bill'], ['amt', 'Amount a month', 'number'], ['day', 'Day it goes out', 'number', 'step="1" min="1" max="31"']])).join('')}</div>
+    ${W.dds.length ? `<p class="muted small">${gbp(wMonthlyBills())} a month in bills.</p>` : ''}`;
+  if (s === 3) body = `
+    <p class="muted small">Only the things you’re paying off. Skip this if you don’t owe anything.</p>
+    <div class="chips">${DEBT_PRESETS.map(([n, t]) => `<button class="chip" data-wadd="debts:${n}|${t}">+ ${n}</button>`).join('')}</div>
+    <div class="list">${W.debts.map((d, i) => wRow('debts', i, [['name', 'Name'], ['balance', 'Owed now', 'number'], ['min', 'Minimum a month', 'number'], ['clearBy', 'Clear it by (optional)', 'month'], ...(d.type === 'card' ? [['promoEnd', '0% ends (optional)', 'date']] : [])])).join('')}</div>
+    ${W.debts.length ? '<p class="muted small">With a clear-by month (or a 0% end date), the plan pays what’s needed to clear it in time. Without one, it pays the minimum.</p>' : ''}`;
+  if (s === 4) {
+    const ef = W.pots.find(p => p.kind === 'ef');
+    body = `
+    <p class="label">Emergency fund</p>
+    <p class="muted small">Money for surprises, so they don’t go on a card. Three months of bills is a common target${W.dds.length ? `: about ${gbp(ef.target, 0)} for you` : ''}.</p>
+    <div class="fields">${wIn('pots.0.target', 'Target')}${wIn('pots.0.each', 'Put in ' + per)}${wIn('pots.0.opening', 'Already saved')}</div>
+    <p class="label">Goals</p>
+    <div class="chips">${GOAL_PRESETS.map(([ic, n]) => `<button class="chip" data-wadd="_goals:${ic}|${n}">+ ${ic} ${n}</button>`).join('')}<button class="chip ghost" data-wadd="_goals:|">+ Other</button></div>
+    <div class="list">${W._goals.map((g, i) => wRow('_goals', i, [['name', 'Goal'], ['target', 'Target', 'number'], ['by', 'Reach it by', 'month']])).join('')}</div>`;
+  }
+  if (s === 5) {
+    const { r, left } = wizSuggest();
+    if (W._budget == null) W._budget = left;
+    const save = Math.max(0, r.P - r.INV - (+W._budget || 0));
+    const line = (t, v) => `<li><span>${t}</span><span>${gbp(v)}</span></li>`;
+    body = `
+    <p class="muted small">This pay period, ${fDate(r.D)} to ${fDate(r.E)}:</p>
+    <ul class="mini plan-sum">${line('Take-home', r.H)}${r.I ? line('Bills due', -r.I) : ''}${r.K ? line('Debt payments', -r.K) : ''}${r.M ? line('Emergency fund', -r.M) : ''}${r.N ? line('Goals', -r.N) : ''}<li class="tot"><span>Left for spending and savings</span><span>${gbp(r.P - r.INV)}</span></li></ul>
+    <div class="fields"><label>Spending budget ${per}<input type="number" step="10" min="0" inputmode="decimal" data-wbudget value="${W._budget}"></label></div>
+    <p class="muted small">${r.P - r.INV < 0 ? 'Your plan is short this period. Lower a goal, the emergency fund payment, or check the figures.' : `We’ve suggested all of it. Lower it to save the difference: ${gbp(save)} would go to savings.`}</p>`;
+  }
+  const last = s === WIZ_STEPS.length - 1;
+  return `<section class="card wiz">
+    <div class="wiz-top"><p class="label">${last ? 'Nearly done' : `Step ${s + 1} of 5`}</p>${s < 5 ? '<button class="linkish" data-wnav="skip">Skip</button>' : ''}</div>
+    ${meter(s / 5)}
+    <h1>${WIZ_STEPS[s]}</h1>
+    ${body}
+    <div class="actions">${s > 0 ? '<button class="btn ghost" data-wnav="back">Back</button>' : '<button class="btn ghost" data-wnav="cancel">Cancel</button>'}
+    <button class="btn" data-wnav="${last ? 'finish' : 'next'}">${last ? 'Open my dashboard' : 'Next'}</button></div>
+  </section>
+  <p class="muted small center">Everything stays on this phone. Stratrix isn’t financial advice.</p>`;
+}
+function wizGo(to) {
+  if (to === 4 && !W._efTouched) {        // suggest three months of bills, rounded up to the next £100
+    const ef = W.pots.find(p => p.kind === 'ef'), bills = wMonthlyBills();
+    if (bills > 0) ef.target = Math.max(500, Math.ceil(bills * 3 / 100) * 100);
+    if (!ef.each && W._pay > 0) ef.each = Math.max(10, Math.round(Math.min(ef.target / 12 * 12 / perYear(W), W._pay * 0.05) / 5) * 5);
+  }
+  if (to === 5) W._budget = null;
+  wizStep = Math.max(0, Math.min(WIZ_STEPS.length - 1, to)); render(); scrollTo(0, 0);
+}
+function wizFinish() {
+  const prev = clone(S);
+  S = wizBuild(W._budget);
+  S.firstRun = true; S.theme = prev.theme;
+  W = null; viewIdx = null; location.hash = '#home';
+  commit('You’re all set up', prev);
+}
+document.addEventListener('input', e => {
+  const t = e.target; if (!W) return;
+  if (t.dataset.wbind) { setW(t.dataset.wbind, t.type === 'number' ? num(t.value) : t.value); if (t.dataset.wbind.startsWith('pots.0')) W._efTouched = true; }
+  if (t.dataset.wlist) W[t.dataset.wlist][+t.dataset.i][t.dataset.f] = t.type === 'number' ? num(t.value) : t.value;
+  if (t.dataset.wbudget != null) W._budget = num(t.value);
+});
+document.addEventListener('change', e => {
+  const t = e.target; if (!W) return;
+  if (t.dataset.wbank) { W._banks[t.dataset.wbank] = t.value; }
+  if (t.dataset.wlist && t.dataset.f === 'amt' && wizStep === 2) render();      // refresh the monthly total
+  if (t.dataset.wbudget != null) render();
+});
+function setW(path, val) { const ks = path.split('.'); let o = W; ks.slice(0, -1).forEach(k => o = o[k]); o[ks.at(-1)] = val; }
+document.addEventListener('click', e => {
+  const t = e.target.closest('button, [data-act]'); if (!t) return;
+  const d = t.dataset;
+  if (d.act === 'setup') return startWizard();
+  if (d.act === 'sample') return loadSample();
+  if (!W) return;
+  if (d.wfreq) { W.pay.freq = d.wfreq; return render(); }
+  if (d.wregion) { W.region = d.wregion; return render(); }
+  if (d.wsplit) { W._split = d.wsplit === 'yes'; return render(); }
+  if (d.wadd) {
+    const [list, val] = d.wadd.split(':'), [a, b] = val.split('|');
+    if (list === 'dds') { if (a && W.dds.some(x => x.name === a)) W.dds = W.dds.filter(x => x.name !== a); else W.dds.push({ id: uid('d'), name: a, amt: null, day: null }); }
+    if (list === 'debts') W.debts.push({ id: uid('d'), name: a === 'Money owed to a person' ? '' : a, type: b, balance: null, asAt: todayIso(), min: null, clearBy: '', promoEnd: '', rate: null, start: '', setAmt: null, account: '' });
+    if (list === '_goals') W._goals.push({ icon: a, name: b, target: null, by: '' });
+    render();
+    const inputs = document.querySelectorAll(`[data-wlist="${list}"][data-f="${list === 'dds' ? 'amt' : list === 'debts' ? (a === 'Money owed to a person' ? 'name' : 'balance') : 'target'}"]`);
+    if (inputs.length && !(list === 'dds' && !W.dds.some(x => x.name === a))) inputs[inputs.length - 1].focus();
+    return;
+  }
+  if (d.wdel) { const [list, i] = d.wdel.split(':'); W[list].splice(+i, 1); return render(); }
+  if (d.wnav === 'next' || d.wnav === 'skip') return wizGo(wizStep + 1);
+  if (d.wnav === 'back') return wizGo(wizStep - 1);
+  if (d.wnav === 'cancel') { W = null; location.hash = '#home'; return; }
+  if (d.wnav === 'finish') return wizFinish();
+});
+
+// ----- sample data: a made-up person to explore with, cleared with one tap -----
+function loadSample() {
+  const t = todayIso(), m = t.slice(0, 7), mAdd = n => addMonths(m + '-01', n).slice(0, 7), dAgo = n => addD(t, -n);
+  const prev = clone(S);
+  S = Object.assign(clone(DEFAULT_STATE), {
+    blank: false, sample: true, theme: S.theme,
+    salary: [{ id: 's1', from: m, amt: 2150 }], budget: [{ id: 'b1', from: m, amt: 520 }],
+    dds: [['Rent', 795, 1], ['Council tax', 142, 1], ['Energy', 96, 12], ['Phone', 18, 20], ['Broadband', 29, 8], ['Streaming', 11, 15]].map(([name, amt, day], i) => ({ id: 'dd' + i, name, amt, day, freq: 'm', active: true })),
+    debts: [{ id: 'cc', name: 'Credit card', type: 'card', balance: 1840, asAt: dAgo(40), min: 25, clearBy: '', promoEnd: addMonths(m + '-01', 16), rate: 0, start: '', setAmt: null, account: '' },
+      { id: 'loan', name: 'Car loan', type: 'loan', balance: 4300, asAt: dAgo(40), min: 165, clearBy: mAdd(26), promoEnd: '', rate: 7.9, start: '', setAmt: null, account: '' }],
+    sinking: [{ id: 'y1', name: 'Car tax', annual: 190, active: true }, { id: 'y2', name: 'MOT and service', annual: 260, active: true }],
+    goals: [{ id: 'g1', icon: '✈️', name: 'Holiday', target: 900, by: mAdd(8), active: true }],
+    logs: [{ id: 'l1', kind: 'debt', ref: 'cc', dir: 'in', amt: 120, date: dAgo(20), note: '' }, { id: 'l2', kind: 'debt', ref: 'loan', dir: 'in', amt: 165, date: dAgo(20), note: '' },
+      { id: 'l3', kind: 'pot', ref: 'ef', dir: 'in', amt: 100, date: dAgo(20), note: '' }, { id: 'l4', kind: 'goal', ref: 'g1', goal: 'g1', dir: 'in', amt: 75, date: dAgo(20), note: '' }],
+    spend: [{ id: 'sp1', type: 'everyday', amt: 134.6, date: dAgo(8) }, { id: 'sp2', type: 'oneoff', amt: 62, date: dAgo(5), reason: 'Birthday present' }],
+  });
+  S.pots[0].target = 3200; S.pots[0].each = 100; S.pots[0].opening = 250;
+  viewIdx = null; location.hash = '#home'; commit('Sample data loaded', prev);
+}
+// "Your next 3 steps" after set-up: ticks itself off as each is done
+function nextSteps() {
+  if (!S.firstRun || S.sample) return '';
+  const r = rows[cur], ck = S.checks[r.key] || {};
+  const items = [
+    { done: Object.values(ck).some(Boolean), t: 'Check this payday’s list', sub: 'See what goes where and tick each one off', href: '#payday' },
+    { done: S.logs.length > 0 || (S.spend || []).length > 0, t: 'Log a payment or your spending', sub: 'Every entry moves your dashboard', href: '#log' },
+    { done: !!S.lastBackup, t: 'Download a backup', sub: 'Keep it in Google Drive or email it to yourself', act: 'backup' },
+  ];
+  if (items.every(i => i.done)) { delete S.firstRun; save(); return ''; }
+  return `<section class="card steps3"><div class="head-row"><h2>Your next 3 steps</h2><button class="linkish" data-act="hideSteps">Hide</button></div>
+    <ol>${items.map(i => `<li class="${i.done ? 'done' : ''}">${i.act ? `<button class="linkish" data-act="${i.act}">` : `<a href="${i.href}">`}<b>${i.t}</b>${i.act ? '</button>' : '</a>'}<span class="muted small">${i.done ? 'Done' : i.sub}</span></li>`).join('')}</ol></section>`;
+}
+
 // ----- render & routing -----
-const ROUTES = { home: viewHome, payday: viewPayday, log: viewLog, goals: viewGoals, manage: viewManage };
+const ROUTES = { home: viewHome, payday: viewPayday, log: viewLog, goals: viewGoals, manage: viewManage, setup: viewSetup };
 const route = () => (location.hash || '#home').slice(1) in ROUTES ? (location.hash || '#home').slice(1) : 'home';
 let lastRoute = null;
 function render() {
@@ -578,6 +782,14 @@ document.addEventListener('click', async e => {
   const d = t.dataset;
   if (d.act === 'theme') { S.theme = resolvedTheme() === 'dark' ? 'light' : 'dark'; save(); return render(); }
   if (d.act === 'undo') { const u = $('#toast')._undo; if (u) { S = u; $('#toast').classList.remove('on'); commit(); } return; }
+  if (d.act === 'hideSteps') { delete S.firstRun; save(); return render(); }
+  if (d.act === 'clearSample' || (d.act === 'startAgain' && armed)) {
+    const prev = clone(S), theme = S.theme; armed = false;
+    S = clone(DEFAULT_STATE); S.theme = theme; viewIdx = null; recalc(); save();
+    if (d.act === 'clearSample') return startWizard();
+    location.hash = '#home'; render(); return toast('Everything deleted', prev, 6000);
+  }
+  if (d.act === 'startAgain') { armed = true; render(); setTimeout(() => { if (armed) { armed = false; render(); } }, 5000); return; }
   if (d.act === 'toggleSimple') { S.simple = !t.checked; return commit(); }
   if (d.act === 'prev') { viewIdx = Math.max(0, viewIdx - 1); return render(); }
   if (d.act === 'next') { viewIdx = Math.min(rows.length - 1, viewIdx + 1); return render(); }
