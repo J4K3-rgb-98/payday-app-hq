@@ -1,6 +1,6 @@
 // Keeps Stratrix working offline. Bump VERSION whenever index.html changes.
 // Caches are shared with other apps on the same web address, so only Stratrix's own caches are ever cleared.
-const VERSION = 'stratrix-v2';
+const VERSION = 'stratrix-v3';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES))); self.skipWaiting(); });
 self.addEventListener('activate', e => {
@@ -13,7 +13,8 @@ self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (url.origin !== location.origin || !url.pathname.startsWith(new URL(self.registration.scope).pathname)) return;
   e.respondWith(
-    fetch(e.request).then(r => {
+    // cache: 'no-cache' asks GitHub every time, so a new version shows on the next open instead of up to 10 minutes later
+    fetch(e.request.url, { cache: 'no-cache' }).then(r => {
       if (r.ok) { const copy = r.clone(); caches.open(VERSION).then(c => c.put(e.request, copy)); }
       return r;
     }).catch(() => caches.match(e.request).then(m => m || caches.match('./index.html')))
