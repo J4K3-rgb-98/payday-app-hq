@@ -120,6 +120,8 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible,su
 .roles{grid-column:1/-1;border:0;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:0 16px}.roles legend{font-size:13px;font-weight:700;color:var(--muted);padding:0;margin-bottom:2px}.roles label.check{min-height:36px;font-size:14px;color:var(--ink);font-weight:600}
 .chip.ghost{border-style:dashed}.seg.wide{display:flex}.seg.wide button{flex:1}.center{text-align:center;margin-top:18px}
 .more{margin-top:12px}.seg.four{display:grid;grid-template-columns:1fr 1fr;width:100%}.seg.four button+button{border-left:1px solid var(--line)}.seg.four button:nth-child(3){border-left:0}.seg.four button:nth-child(n+3){border-top:1px solid var(--line)}
+.homeorder{list-style:none;margin:8px 0;padding:0}.homeorder li{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}.homeorder .row-btns{display:flex;gap:6px}
+.debtfree{margin-bottom:16px}.debtfree .num{margin:2px 0}
 .int-note{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)}
 .wiz{max-width:640px;margin:0 auto}.wiz h1{margin:6px 0 14px}.wiz-top{display:flex;justify-content:space-between;align-items:center}.wiz-top .label{margin:0}.wiz .meter{margin:8px 0 14px}
 .wiz .chips{margin-bottom:14px}.wiz .label{margin-top:10px}
@@ -476,7 +478,7 @@ const DEFAULT_STATE = (() => {
       { id: 'yearly', name: 'Yearly costs', kind: 'yearly', target: null, each: 0, opening: 0, asAt: today },
     ],
     investments: { opening: 0, asAt: today, target: null },
-    dds: [], joint: [], sinking: [], goals: [], logs: [], investValues: [], spend: [], leftover: {}, celebrated: {}, checks: {},
+    dds: [], joint: [], sinking: [], goals: [], logs: [], investValues: [], spend: [], leftover: {}, celebrated: {}, checks: {}, homeHidden: {},
   };
 })();
 
@@ -548,8 +550,8 @@ const STORE_KEY = 'stratrix-state', THEME_KEY = 'stratrix-theme';
 // Saved data carries a version number. Each step below upgrades data from one version to the next, so updates never break old data or backups.
 const DATA_VERSION = 3;
 // The app's version, shown in Manage. Bump it (and VERSION in sw.js) with every release, and add a line to WHATS_NEW.
-const APP_VERSION = '3.1.1';
-const WHATS_NEW = 'Version number shown in Manage, and a message when the app updates.';
+const APP_VERSION = '3.2.0';
+const WHATS_NEW = 'Reorder or hide sections of Home in Manage → Home screen. Once you’re debt-free, savings move to the top.';
 const MIGRATIONS = {
   // 1 -> 2: Payday HQ data (version 1) brought into Stratrix. Nothing to reshape.
   1: o => o,
@@ -639,7 +641,7 @@ function applyLoaded(o) {
   const base = clone(DEFAULT_STATE); delete base.blank;
   S = migrate(Object.assign(base, { v: 1 }, o || {}));
   for (const k of ['logs', 'investValues', 'goals', 'dds', 'joint', 'sinking', 'salary', 'budget', 'investPlan', 'debts', 'pots', 'accounts', 'spend']) if (!Array.isArray(S[k])) S[k] = [];
-  for (const k of ['checks', 'celebrated', 'actualPay', 'paydayOverrides', 'leftover', 'pay', 'investments']) if (!S[k] || typeof S[k] !== 'object') S[k] = {};
+  for (const k of ['checks', 'celebrated', 'actualPay', 'paydayOverrides', 'leftover', 'pay', 'investments', 'homeHidden']) if (!S[k] || typeof S[k] !== 'object') S[k] = {};
 }
 function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); if (S.theme) localStorage.setItem(THEME_KEY, S.theme); } catch (e) { toast('Couldn’t save on this device. Download a backup.'); } }
 function connect() {
@@ -670,6 +672,15 @@ const clearRow = get => {     // the pay period where a balance reaches zero in 
   return n < 0 ? null : rows[n - 1];
 };
 const debtStart = d => Number(d.balance || 0);
+// home screen sections: order and visibility are set in Manage. Once debt-free, the debt panel moves to the bottom by default.
+const HOME_SECTIONS = { debt: 'Debt destroyed', spend: 'Spent this period', savings: 'Savings built', tiles: 'Debt and pot tiles', goals: 'Goals' };
+const debtFree = () => { const t = S.debts.reduce((a, d) => a + debtStart(d), 0); return t > 0 && S.debts.every(d => B.debt[d.id] <= 0.005); };
+function homeOrder() {
+  const def = debtFree() || !S.debts.length ? ['savings', 'spend', 'tiles', 'goals', 'debt'] : ['debt', 'spend', 'savings', 'tiles', 'goals'];
+  const o = (S.homeOrder || def).filter(k => HOME_SECTIONS[k]);
+  def.forEach(k => { if (!o.includes(k)) o.push(k); });
+  return o;
+}
 const potsShown = () => S.pots.filter(p => p.kind !== 'yearly' || S.sinking.length || B.pot[p.id]);
 
 // ----- milestones and confetti -----
@@ -763,26 +774,17 @@ function viewHome() {
   const saved = pots.reduce((a, x) => a + x.v, 0), planned = pots.reduce((a, x) => a + x.plan, 0);
   const targetTotal = pots.length && pots.every(x => x.target) ? pots.reduce((a, x) => a + x.target, 0) : 0;
   const tiles = [
-    ...debts.map(d => { const cm = clearRow(x => x.debt[d.id].bal), st = debtStart(d); return { t: d.name + (d.account ? ' · ' + d.account : ''), v: B.debt[d.id], debt: 1,
+    ...[...debts].sort((x, y) => (B.debt[x.id] <= 0) - (B.debt[y.id] <= 0)).map(d => { const cm = clearRow(x => x.debt[d.id].bal), st = debtStart(d); return { t: d.name + (d.account ? ' · ' + d.account : ''), v: B.debt[d.id], debt: 1,
       sub: st ? `${pct(1 - B.debt[d.id] / st)} ${d.type === 'person' ? 'repaid' : 'destroyed'} of ${gbp(st, 0)}` : 'No balance set', p: st ? 1 - B.debt[d.id] / st : null,
       foot: cm === 'done' ? 'Cleared' : cm ? 'Clear by ' + fMonth(cm.D) : debtTarget(d) ? 'Not cleared within plan' : 'Paying the minimum: add a clear-by month' }; }),
     ...potsShown().filter(pt => pt.kind === 'yearly' || pt.kind === 'other').map(pt => ({ t: pt.name, v: B.pot[pt.id], p: pt.target ? B.pot[pt.id] / pt.target : null,
       sub: pt.kind === 'yearly' ? `${gbp(r.O)} set aside each payday` : pt.target ? `${pct(B.pot[pt.id] / pt.target)} of ${gbp(pt.target, 0)}` : 'Waiting for a job',
       foot: pt.kind === 'yearly' ? (S.sinking.filter(s => s.active !== false && s.annual > 0).map(s => s.name).join(', ') || 'No yearly costs added') : 'Move it with a log entry' })),
   ];
-  const needBackup = !S.blank && !S.sample && S.logs.length && (!S.lastBackup || daysTo(S.lastBackup) < -30);
-  return `
-  ${S.blank ? `<section class="card welcome"><h1>Welcome to Stratrix</h1><p class="muted">Your payday plan, debt countdown and savings tracker. Everything stays on this phone: nothing is sent anywhere and there’s no sign-up.</p>
-    <div class="actions left"><button class="btn" data-act="setup">Set up in 2 minutes</button><button class="btn ghost" data-act="sample">Try with sample data</button><label class="btn ghost file">Restore a backup<input type="file" accept=".json,application/json" id="restore"></label></div>
-    <p class="muted small">Stratrix helps you plan and track. It isn’t financial advice.</p></section>` : ''}
-  ${S.blank ? '' : `  ${S.sample ? `<div class="note checkin"><span>You’re looking at sample data for a made-up person.</span><button class="btn" data-act="clearSample">Clear it and set up</button></div>` : ''}
-  ${nextSteps()}
-  ${needBackup ? `<div class="note">It’s been a while since your last backup. <button class="linkish" data-act="backup">Download one now</button></div>` : ''}
-  ${lo ? `<section class="card prompt"><p class="label">Pay period ended ${fDate(lo.r.E)}</p><h2>You had ${gbp(lo.left)} left over</h2><p class="muted small">Move it somewhere now so it doesn’t disappear into this period’s spending.</p>
-    <div class="chips">${S.pots.filter(pt => pt.kind !== 'yearly').map(pt => `<button class="chip" data-leftover="pot:${pt.id}">${esc(pt.name)}</button>`).join('')}${G.filter(g => g.active !== false && g.saved < g.target).map(g => `<button class="chip" data-leftover="goal:${g.id}">${esc(g.icon || '')} ${esc(g.name)}</button>`).join('')}<button class="chip ghost" data-leftover="keep">Keep it as a buffer</button></div></section>` : ''}
-  ${ci ? `<div class="note checkin"><span>Weekly check-in: what have you spent since ${fDate(ci)}?</span><button class="btn" data-act="checkin">Add spending</button></div>` : ''}
-  ${short ? `<div class="alert"><span>Your plan is short in ${short} pay period${short > 1 ? 's' : ''}. Lower the spending budget, a goal or investments. <a href="#payday">See payday</a></span></div>` : ''}
-  ${debts.length ? `<section class="hero card">
+  // the sections below the prompts, in the order chosen in Manage → Home screen
+  const sec = {
+    debt: !debts.length ? '' : left <= 0.005 && total > 0 ? `<section class="card debtfree"><p class="label">Debt destroyed</p><p class="num">${gbp(paid)}</p><p class="muted small">Debt-free. Every payday is yours now.</p></section>` : `
+<section class="hero card">
     <div class="hero-text">
       <p class="label">Debt destroyed</p>
       <p class="huge">${gbp(paid)}</p>
@@ -792,9 +794,9 @@ function viewHome() {
       <p class="muted small">Next payday ${fDate(np)}, in ${daysTo(np)} days.</p>
     </div>
     <div class="fig" id="debtChart" role="img" aria-label="Debt countdown chart"></div>
-  </section>` : ''}
-  ${budgetOf(r) > 0 ? `<section class="card spendcard">${spendBlock(r)}<div class="actions left"><button class="btn ghost" data-act="checkin">Add spending</button></div></section>` : ''}
-  <section class="hero card grow">
+  </section>`,
+    spend: `${budgetOf(r) > 0 ? `<section class="card spendcard">${spendBlock(r)}<div class="actions left"><button class="btn ghost" data-act="checkin">Add spending</button></div></section>` : ''}`,
+    savings: `<section class="hero card grow">
     <div class="hero-text">
       <p class="label">Savings built</p>
       <p class="huge">${gbp(saved)}</p>
@@ -812,8 +814,8 @@ function viewHome() {
       ${taxInt ? `<p class="muted small int-note">Interest this tax year (since ${fDate(taxYearStart(), { day: 'numeric', month: 'short' })}): <b>${gbp(taxInt)}</b>${S.pots.some(p => p.isa) ? ', not counting ISAs' : ''}. Most people can earn £1,000 a year tax-free, or £500 if they pay higher-rate tax.</p>` : ''}
     </div>
     <div class="fig" id="growChart" role="img" aria-label="Savings growth chart"></div>
-  </section>
-  ${tiles.length ? `<div class="grid">${tiles.map(c => `
+  </section>`,
+    tiles: `${tiles.length ? `<div class="grid">${tiles.map(c => `
     <article class="card tile ${c.debt ? 'debt' : ''}">
       <p class="label">${esc(c.t)}</p>
       <p class="num">${gbp(c.v)}</p>
@@ -821,9 +823,23 @@ function viewHome() {
       ${c.p != null ? meter(c.p) + badges(c.p) : ''}
       <p class="foot">${esc(c.foot)}</p>
     </article>`).join('')}
-  </div>` : ''}
-  <div class="head-row"><h2>Goals</h2><a class="btn ghost" href="#goals">Manage goals</a></div>
-  ${G.length ? `<div class="grid goals">${G.map(goalTile).join('')}</div>` : `<div class="card empty">No goals yet. <a href="#goals">Add one</a>, like a holiday or a car.</div>`}`}`;
+  </div>` : ''}`,
+    goals: `<div class="head-row"><h2>Goals</h2><a class="btn ghost" href="#goals">Manage goals</a></div>
+  ${G.length ? `<div class="grid goals">${G.map(goalTile).join('')}</div>` : `<div class="card empty">No goals yet. <a href="#goals">Add one</a>, like a holiday or a car.</div>`}`,
+  };
+  const needBackup = !S.blank && !S.sample && S.logs.length && (!S.lastBackup || daysTo(S.lastBackup) < -30);
+  return `
+  ${S.blank ? `<section class="card welcome"><h1>Welcome to Stratrix</h1><p class="muted">Your payday plan, debt countdown and savings tracker. Everything stays on this phone: nothing is sent anywhere and there’s no sign-up.</p>
+    <div class="actions left"><button class="btn" data-act="setup">Set up in 2 minutes</button><button class="btn ghost" data-act="sample">Try with sample data</button><label class="btn ghost file">Restore a backup<input type="file" accept=".json,application/json" id="restore"></label></div>
+    <p class="muted small">Stratrix helps you plan and track. It isn’t financial advice.</p></section>` : ''}
+  ${S.blank ? '' : `  ${S.sample ? `<div class="note checkin"><span>You’re looking at sample data for a made-up person.</span><button class="btn" data-act="clearSample">Clear it and set up</button></div>` : ''}
+  ${nextSteps()}
+  ${needBackup ? `<div class="note">It’s been a while since your last backup. <button class="linkish" data-act="backup">Download one now</button></div>` : ''}
+  ${lo ? `<section class="card prompt"><p class="label">Pay period ended ${fDate(lo.r.E)}</p><h2>You had ${gbp(lo.left)} left over</h2><p class="muted small">Move it somewhere now so it doesn’t disappear into this period’s spending.</p>
+    <div class="chips">${S.pots.filter(pt => pt.kind !== 'yearly').map(pt => `<button class="chip" data-leftover="pot:${pt.id}">${esc(pt.name)}</button>`).join('')}${G.filter(g => g.active !== false && g.saved < g.target).map(g => `<button class="chip" data-leftover="goal:${g.id}">${esc(g.icon || '')} ${esc(g.name)}</button>`).join('')}<button class="chip ghost" data-leftover="keep">Keep it as a buffer</button></div></section>` : ''}
+  ${ci ? `<div class="note checkin"><span>Weekly check-in: what have you spent since ${fDate(ci)}?</span><button class="btn" data-act="checkin">Add spending</button></div>` : ''}
+  ${short ? `<div class="alert"><span>Your plan is short in ${short} pay period${short > 1 ? 's' : ''}. Lower the spending budget, a goal or investments. <a href="#payday">See payday</a></span></div>` : ''}
+  ${homeOrder().filter(k => !S.homeHidden[k]).map(k => sec[k]).join('')}`}`;
 }
 function goalTile(g) {
   const p = g.target ? g.saved / g.target : 0;
@@ -1026,6 +1042,11 @@ function viewManage() {
   <details class="card sec"><summary>Investments <span class="muted">${gbp(B.invValue)}</span></summary><div class="fields">
     ${fld('Value now', 'investments.opening')}${fld('Value on', 'investments.asAt', 'date')}${fld('Target (optional)', 'investments.target')}</div>
     <p class="label">Paid in each payday</p>${listEditor('investPlan', [{ f: 'from', l: 'From', type: 'month' }, { f: 'amt', l: 'Amount', type: 'number' }], 'Add contribution')}</details>
+  <details class="card sec"><summary>Home screen <span class="muted">${S.homeOrder ? 'Your order' : debtFree() ? 'Debt-free order' : 'Standard order'}</span></summary>
+    <p class="muted small">Choose the order of Home and hide what you don’t need. Reminders and warnings always stay at the top.</p>
+    <ul class="homeorder">${homeOrder().map((k, i, o) => `<li><label class="check"><input type="checkbox" data-hshow="${k}" ${S.homeHidden[k] ? '' : 'checked'}> ${HOME_SECTIONS[k]}</label>
+      <span class="row-btns"><button class="icon" data-hmove="${k}:-1" aria-label="Move ${HOME_SECTIONS[k]} up" ${i === 0 ? 'disabled' : ''}>↑</button><button class="icon" data-hmove="${k}:1" aria-label="Move ${HOME_SECTIONS[k]} down" ${i === o.length - 1 ? 'disabled' : ''}>↓</button></span></li>`).join('')}</ul>
+    ${S.homeOrder || Object.values(S.homeHidden).some(Boolean) ? '<div class="actions left"><button class="btn ghost" data-act="homeReset">Reset to standard</button></div>' : '<p class="muted small">Standard order puts debt first while you’re paying it off, and savings first once you’re debt-free.</p>'}</details>
   <details class="card sec"><summary>Your data</summary>
     <p class="muted small">Saved on this phone only. Download a backup now and then, and keep it somewhere safe (Google Drive, or email it to yourself). Never upload it anywhere public.${S.lastBackup ? ' Last backup: ' + fDate(S.lastBackup, { day: 'numeric', month: 'short', year: 'numeric' }) + '.' : ''}</p>
     <div class="actions left"><button class="btn" data-act="export">Export to Excel</button><button class="btn ghost" data-act="backup">Download backup</button>
@@ -1322,6 +1343,7 @@ const slug = s => (s || 'item').toLowerCase().replace(/[^a-z0-9]+/g, '-').replac
 document.addEventListener('change', e => {
   const t = e.target;
   if (t.dataset.bind) { setPath(t.dataset.bind, t.type === 'number' ? num(t.value) : t.value); return commit(); }
+  if (t.dataset.hshow) { S.homeHidden[t.dataset.hshow] = !t.checked; save(); return render(); }
   if (t.dataset.role) { const a = S.accounts[+t.dataset.i]; a.roles = (a.roles || []).filter(x => x !== t.dataset.role); if (t.checked) a.roles.push(t.dataset.role); return commit(); }
   if (t.dataset.list) {
     const it = S[t.dataset.list][+t.dataset.i];
@@ -1351,6 +1373,8 @@ document.addEventListener('click', async e => {
     location.hash = '#home'; render(); return toast('Everything deleted', prev, 6000);
   }
   if (d.act === 'startAgain') { armed = true; render(); setTimeout(() => { if (armed) { armed = false; render(); } }, 5000); return; }
+  if (d.hmove) { const [k, dir] = d.hmove.split(':'), o = homeOrder(), i = o.indexOf(k), j = i + +dir; if (j < 0 || j >= o.length) return; [o[i], o[j]] = [o[j], o[i]]; S.homeOrder = o; save(); return render(); }
+  if (d.act === 'homeReset') { delete S.homeOrder; S.homeHidden = {}; save(); return render(); }
   if (d.act === 'toggleSimple') { S.simple = !t.checked; return commit(); }
   if (d.act === 'prev') { viewIdx = Math.max(0, viewIdx - 1); return render(); }
   if (d.act === 'next') { viewIdx = Math.min(rows.length - 1, viewIdx + 1); return render(); }

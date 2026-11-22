@@ -13,6 +13,6 @@ const DEFAULT_STATE = (() => {
       { id: 'yearly', name: 'Yearly costs', kind: 'yearly', target: null, each: 0, opening: 0, asAt: today },
     ],
     investments: { opening: 0, asAt: today, target: null },
-    dds: [], joint: [], sinking: [], goals: [], logs: [], investValues: [], spend: [], leftover: {}, celebrated: {}, checks: {},
+    dds: [], joint: [], sinking: [], goals: [], logs: [], investValues: [], spend: [], leftover: {}, celebrated: {}, checks: {}, homeHidden: {},
   };
 })();
