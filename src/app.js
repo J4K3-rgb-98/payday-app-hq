@@ -5,8 +5,8 @@ const STORE_KEY = 'stratrix-state', THEME_KEY = 'stratrix-theme';
 // Saved data carries a version number. Each step below upgrades data from one version to the next, so updates never break old data or backups.
 const DATA_VERSION = 3;
 // The app's version, shown in Manage. Bump it (and VERSION in sw.js) with every release, and add a line to WHATS_NEW.
-const APP_VERSION = '3.2.0';
-const WHATS_NEW = 'Reorder or hide sections of Home in Manage → Home screen. Once you’re debt-free, savings move to the top.';
+const APP_VERSION = '3.2.1';
+const WHATS_NEW = 'Even spacing between Home sections, whatever order they’re in.';
 const MIGRATIONS = {
   // 1 -> 2: Payday HQ data (version 1) brought into Stratrix. Nothing to reshape.
   1: o => o,
@@ -294,7 +294,7 @@ function viewHome() {
     <div class="chips">${S.pots.filter(pt => pt.kind !== 'yearly').map(pt => `<button class="chip" data-leftover="pot:${pt.id}">${esc(pt.name)}</button>`).join('')}${G.filter(g => g.active !== false && g.saved < g.target).map(g => `<button class="chip" data-leftover="goal:${g.id}">${esc(g.icon || '')} ${esc(g.name)}</button>`).join('')}<button class="chip ghost" data-leftover="keep">Keep it as a buffer</button></div></section>` : ''}
   ${ci ? `<div class="note checkin"><span>Weekly check-in: what have you spent since ${fDate(ci)}?</span><button class="btn" data-act="checkin">Add spending</button></div>` : ''}
   ${short ? `<div class="alert"><span>Your plan is short in ${short} pay period${short > 1 ? 's' : ''}. Lower the spending budget, a goal or investments. <a href="#payday">See payday</a></span></div>` : ''}
-  ${homeOrder().filter(k => !S.homeHidden[k]).map(k => sec[k]).join('')}`}`;
+  ${homeOrder().filter(k => !S.homeHidden[k] && sec[k]).map(k => `<div class="hsec">${sec[k]}</div>`).join('')}`}`;
 }
 function goalTile(g) {
   const p = g.target ? g.saved / g.target : 0;
