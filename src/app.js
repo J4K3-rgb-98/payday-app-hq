@@ -76,6 +76,9 @@ const codeFor = bank => KNOWN_CODES[bank] || (bank || 'ACC').replace(/[^A-Za-z]/
 const debtName = id => (S.debts.find(d => d.id === id) || {}).name || 'Deleted debt';
 const potName = id => (S.pots.find(p => p.id === id) || {}).name || 'Deleted pot';
 const kindLabel = l => l.kind === 'goal' ? (S.goals.find(g => g.id === (l.goal || l.ref))?.name || 'Goal') : l.kind === 'debt' ? debtName(l.ref) : l.kind === 'pot' ? potName(l.ref) : 'Investments';
+// interest: logged with the Interest button or worked out from Update balance
+const taxYearStart = () => { const t = todayIso(), y = +t.slice(0, 4); return t >= y + '-04-06' ? y + '-04-06' : (y - 1) + '-04-06'; };
+const potInterest = (id, from) => Math.round(S.logs.filter(l => l.kind === 'pot' && l.interest && (!id || l.ref === id) && (!from || l.date >= from) && (id || !(S.pots.find(p => p.id === l.ref) || {}).isa)).reduce((a, l) => a + (+l.amt || 0), 0) * 100) / 100;
 const spareName = () => S.spareTo === 'spending' ? 'Spending' : potName(S.spareTo);
 
 // ----- accounts: only used when the person splits money across accounts -----
@@ -201,7 +204,8 @@ function viewHome() {
   const r = rows[cur], np = todayIso() < r.D ? r.D : r.E;
   const short = rows.slice(cur).filter(x => x.S < -0.005).length;
   const G = goalsNow(), lo = leftoverDue(), ci = checkinDue();
-  const pots = potsShown().filter(pt => pt.kind !== 'yearly' && pt.kind !== 'other').map(pt => ({ t: pt.name, v: B.pot[pt.id], target: pt.target, plan: rows[cur].pot[pt.id].plan, note: 'No target set' }));
+  const pots = potsShown().filter(pt => pt.kind !== 'yearly' && pt.kind !== 'other').map(pt => { const i = potInterest(pt.id); return { t: pt.name + (pt.isa ? ' · ISA' : ''), v: B.pot[pt.id], target: pt.target, plan: rows[cur].pot[pt.id].plan, note: 'No target set', extra: i ? `${gbp(i)} interest earned` : '' }; });
+  const taxInt = potInterest(null, taxYearStart());
   if (B.invPaid || B.invValue || S.investPlan.length) pots.push({ t: 'Investments', v: B.invValue, target: S.investments.target, plan: r.INV, note: 'No target set', extra: `${B.invGrowth >= 0 ? '+' : '−'}${gbp(Math.abs(B.invGrowth))} growth` });
   const saved = pots.reduce((a, x) => a + x.v, 0), planned = pots.reduce((a, x) => a + x.plan, 0);
   const targetTotal = pots.length && pots.every(x => x.target) ? pots.reduce((a, x) => a + x.target, 0) : 0;
@@ -252,6 +256,7 @@ function viewHome() {
           ${x.extra ? `<p class="muted small">${x.extra}</p>` : ''}
         </div>`).join('')}
       </div>
+      ${taxInt ? `<p class="muted small int-note">Interest this tax year (since ${fDate(taxYearStart(), { day: 'numeric', month: 'short' })}): <b>${gbp(taxInt)}</b>${S.pots.some(p => p.isa) ? ', not counting ISAs' : ''}. Most people can earn £1,000 a year tax-free, or £500 if they pay higher-rate tax.</p>` : ''}
     </div>
     <div class="fig" id="growChart" role="img" aria-label="Savings growth chart"></div>
   </section>
@@ -351,14 +356,17 @@ function viewLog() {
       <label class="wide">Paid from<select id="fPot"><option value="">My spending budget</option>${S.pots.map(p => `<option value="${p.id}" ${e.pot === p.id ? 'selected' : ''}>${esc(p.name)} pot</option>`).join('')}</select></label>` : ''}
     </div>` : `
     <div class="chips" role="group" aria-label="What it's for">${kinds.map(([k, l]) => `<button class="chip ${logKind === k ? 'on' : ''}" data-kind="${k}">${esc(l)}</button>`).join('')}</div>
-    ${isDebt ? '' : `<div class="seg" role="group" aria-label="Direction">
+    ${isDebt ? '' : `<div class="seg ${logKind.startsWith('pot:') ? 'four' : ''}" role="group" aria-label="Direction">
       <button class="${logDir === 'in' ? 'on' : ''}" data-dir="in">${logKind === 'invest' ? 'Paid in' : 'Money in'}</button>
       <button class="${logDir === 'out' ? 'on' : ''}" data-dir="out">${logKind === 'invest' ? 'Withdrawn' : 'Money out'}</button>
-      ${logKind === 'invest' ? `<button class="${logDir === 'value' ? 'on' : ''}" data-dir="value">Update value</button>` : ''}</div>`}
+      ${logKind === 'invest' ? `<button class="${logDir === 'value' ? 'on' : ''}" data-dir="value">Update value</button>` : ''}
+      ${logKind.startsWith('pot:') ? `<button class="${logDir === 'interest' ? 'on' : ''}" data-dir="interest">Interest</button><button class="${logDir === 'balance' ? 'on' : ''}" data-dir="balance">Update balance</button>` : ''}</div>
+    ${logDir === 'interest' ? '<p class="muted small">Interest your bank paid into this pot. It’s counted separately, so you can see what your savings earned.</p>' : ''}
+    ${logDir === 'balance' && logKind.startsWith('pot:') ? `<p class="muted small">Type the balance your banking app shows. Stratrix has it at ${gbp(B.pot[logKind.slice(4)])}; any difference is logged for you (more is counted as interest).</p>` : ''}`}
     <div class="fields">
-      <label>${logDir === 'value' ? 'Value shown in your app' : 'Amount'}<input id="fAmt" type="number" step="0.01" min="0" inputmode="decimal" value="${e.amt ?? e.value ?? ''}" placeholder="0.00"></label>
+      <label>${logDir === 'value' ? 'Value shown in your app' : logDir === 'balance' ? 'Balance shown in your banking app' : 'Amount'}<input id="fAmt" type="number" step="0.01" min="0" inputmode="decimal" value="${e.amt ?? e.value ?? ''}" placeholder="0.00"></label>
       <label>Date<input id="fDate" type="date" value="${e.date || todayIso()}"></label>
-      ${logDir === 'value' ? '' : `<label class="wide">Note<input id="fNote" type="text" maxlength="80" value="${esc(e.note || '')}" placeholder="Optional"></label>`}
+      ${logDir === 'value' || logDir === 'balance' ? '' : `<label class="wide">Note<input id="fNote" type="text" maxlength="80" value="${esc(e.note || '')}" placeholder="Optional"></label>`}
     </div>`;
   return `
   <section class="card form">
@@ -372,7 +380,7 @@ function viewLog() {
     const when = fDate(l.date, { day: 'numeric', month: 'short', year: 'numeric' });
     if (l._t === 'value') return `<li><div><b>Investments value</b><span class="muted small">${when}</span></div><span class="amt">${gbp(l.value)}</span><span class="row-btns"><button data-edit-value="${l.id}">Edit</button><button data-del-value="${l.id}">Delete</button></span></li>`;
     if (l._t === 'spend') return `<li><div><b>Spending · ${l.type === 'oneoff' ? esc(l.reason || 'One-off') : 'Everyday'}</b><span class="muted small">${when}${l.pot ? ' · from ' + esc(potName(l.pot)) : ''}</span></div><span class="amt">${gbp(l.amt)}</span><span class="row-btns"><button data-edit-spend="${l.id}">Edit</button><button data-del-spend="${l.id}">Delete</button></span></li>`;
-    return `<li><div><b>${esc(kindLabel(l))}</b><span class="muted small">${when}${l.note ? ' · ' + esc(l.note) : ''}</span></div><span class="amt ${l.dir === 'out' ? 'neg' : ''}">${l.dir === 'out' ? '−' : '+'}${gbp(l.amt).replace('−', '')}</span><span class="row-btns"><button data-edit="${l.id}">Edit</button><button data-del="${l.id}">Delete</button></span></li>`;
+    return `<li><div><b>${esc(kindLabel(l))}${l.interest ? ' · interest' : ''}</b><span class="muted small">${when}${l.note ? ' · ' + esc(l.note) : ''}</span></div><span class="amt ${l.dir === 'out' ? 'neg' : ''}">${l.dir === 'out' ? '−' : '+'}${gbp(l.amt).replace('−', '')}</span><span class="row-btns"><button data-edit="${l.id}">Edit</button><button data-del="${l.id}">Delete</button></span></li>`;
   }).join('')}</ul>`
     : '<div class="card empty">Nothing logged yet. Every payment you log moves your dashboard.</div>'}`;
 }
@@ -401,7 +409,7 @@ const sel = (label, path, opts) => `<label>${label}<select data-bind="${path}">$
 const bankOptions = v => `<option value="">Choose…</option>${Object.entries(BANKS).map(([g, bs]) => `<optgroup label="${g}">${bs.map(b => `<option ${b === v ? 'selected' : ''}>${esc(b)}</option>`).join('')}</optgroup>`).join('')}<option value="Other" ${v === 'Other' ? 'selected' : ''}>Other</option>`;
 const listEditor = (name, cols, addLabel) => `
   <div class="list">${S[name].map((it, i) => `<div class="lrow">${cols.map(c => c.type === 'check'
-    ? `<label class="check"><input type="checkbox" data-list="${name}" data-i="${i}" data-f="${c.f}" ${it[c.f] !== false ? 'checked' : ''}> ${c.l}</label>`
+    ? `<label class="check"><input type="checkbox" data-list="${name}" data-i="${i}" data-f="${c.f}" ${(c.def === false ? it[c.f] === true : it[c.f] !== false) ? 'checked' : ''}> ${c.l}</label>`
     : c.type === 'select' ? `<label class="${c.cls || ''}">${c.l}<select data-list="${name}" data-i="${i}" data-f="${c.f}">${c.opts.map(([v, t]) => `<option value="${esc(v)}" ${String(it[c.f] ?? '') === String(v) ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label>`
     : c.type === 'bank' ? `<label class="${c.cls || ''}">${c.l}<select data-list="${name}" data-i="${i}" data-f="${c.f}">${bankOptions(it[c.f])}</select></label>`
     : c.type === 'roles' ? `<fieldset class="roles"><legend>Used for</legend>${Object.entries(ROLES).map(([k, t]) => `<label class="check"><input type="checkbox" data-role="${k}" data-i="${i}" ${(it.roles || []).includes(k) ? 'checked' : ''}> ${t}</label>`).join('')}</fieldset>`
@@ -452,7 +460,7 @@ function viewManage() {
     <p class="muted small">A set amount frees money for the next debt in the list. Once the others are cleared, this one catches up to hit its own date.</p></details>
   <details class="card sec"><summary>Pots <span class="muted">${S.pots.length} pots</span></summary>
     <p class="muted small">The emergency fund is filled first (up to its target), then goals, then yearly costs, then other pots. Spare money goes to the pot chosen under Spending.</p>
-    ${listEditor('pots', [{ f: 'name', l: 'Name', cls: 'wide' }, { f: 'kind', l: 'Type', type: 'select', opts: Object.entries(POT_KINDS) }, { f: 'target', l: 'Target', type: 'number' }, { f: 'each', l: 'Each payday', type: 'number' }, { f: 'opening', l: 'In it now', type: 'number' }, { f: 'asAt', l: 'As at', type: 'date' }], 'Add pot')}</details>
+    ${listEditor('pots', [{ f: 'name', l: 'Name', cls: 'wide' }, { f: 'kind', l: 'Type', type: 'select', opts: Object.entries(POT_KINDS) }, { f: 'target', l: 'Target', type: 'number' }, { f: 'each', l: 'Each payday', type: 'number' }, { f: 'opening', l: 'In it now', type: 'number' }, { f: 'asAt', l: 'As at', type: 'date' }, { f: 'isa', l: 'Cash ISA (interest is tax-free)', type: 'check', def: false }], 'Add pot')}</details>
   <details class="card sec" id="dds"><summary>Bills <span class="muted">${gbp(ddTotal)} a month on average</span></summary>
     ${listEditor('dds', [{ f: 'name', l: 'Bill', cls: 'wide' }, { f: 'amt', l: 'Amount', type: 'number' }, { f: 'freq', l: 'How often', type: 'select', opts: [['m', 'Monthly'], ['28', 'Every 28 days']] }, { f: 'day', l: 'Day of month', type: 'number' }, { f: 'anchor', l: 'A known date (28-day)', type: 'date' }, { f: 'end', l: 'Ends', type: 'date' }, { f: 'active', l: 'Active', type: 'check' }], 'Add bill')}
     <p class="muted small">Bills count in a pay period only when they fall due before the next payday. Weekend or bank holiday dates move to the next working day.</p></details>
@@ -521,10 +529,10 @@ function exportSheets() {
   sheets.push({ name: 'Bills', widths: [24, 12, 14, 12, 14, 12, 8], rows: [h(['Bill', 'Amount', 'How often', 'Day', 'Known date', 'Ends', 'Active']), ...S.dds.map(d => [d.name, g(+d.amt), d.freq === '28' ? 'Every 28 days' : 'Monthly', d.day || '', d.anchor ? { v: d.anchor, t: 'date' } : '', d.end ? { v: d.end, t: 'date' } : '', d.active !== false ? 'Yes' : 'No'])] });
   sheets.push({ name: 'Shared Costs', widths: [24, 12, 12, 16, 8], rows: [h(['Item', 'Your share', 'How often', 'Monthly', 'Active']), ...S.joint.map(j => [j.name, g(+j.amt), j.freq, g(sharedMonthly(j)), j.active !== false ? 'Yes' : 'No'])] });
   sheets.push({ name: 'Yearly Costs', widths: [24, 12, 14, 8], rows: [h(['Cost', 'Per year', 'Per month', 'Active']), ...S.sinking.map(s => [s.name, g(+s.annual), g(s.annual / 12), s.active !== false ? 'Yes' : 'No'])] });
-  const logRows = (kind, ref) => S.logs.filter(l => l.kind === kind && (!ref || l.ref === ref)).sort((a, b) => a.date < b.date ? -1 : 1).map(l => [{ v: l.date, t: 'date' }, kindLabel(l), l.dir === 'out' ? '' : g(+l.amt), l.dir === 'out' ? g(+l.amt) : '', l.note || '']);
+  const logRows = (kind, ref) => S.logs.filter(l => l.kind === kind && (!ref || l.ref === ref)).sort((a, b) => a.date < b.date ? -1 : 1).map(l => [{ v: l.date, t: 'date' }, kindLabel(l) + (l.interest ? ' (interest)' : ''), l.dir === 'out' ? '' : g(+l.amt), l.dir === 'out' ? g(+l.amt) : '', l.note || '']);
   sheets.push({ name: 'Debts', widths: [24, 18, 14, 14, 12, 12, 14], rows: [h(['Debt', 'Type', 'Started at', 'Left now', '0% ends', 'Clear by', 'This period']), ...S.debts.map(d => [d.name, DEBT_TYPES[d.type] || '', g(debtStart(d)), g(B.debt[d.id]), d.promoEnd ? { v: d.promoEnd, t: 'date' } : '', d.clearBy ? { v: d.clearBy, t: 'month' } : '', g(r.debt[d.id].pay)]), [],
     h(['Date', 'Debt', 'Paid', 'Refund', 'Note']), ...logRows('debt')] });
-  sheets.push({ name: 'Pots', widths: [18, 16, 12, 12, 12, 30], rows: [h(['Pot', 'Type', 'Opening', 'Now', 'Target']), ...S.pots.map(p => [p.name, POT_KINDS[p.kind] || '', g(+p.opening || 0), g(B.pot[p.id]), p.target ? g(+p.target) : '']), [],
+  sheets.push({ name: 'Pots', widths: [18, 16, 12, 12, 12, 14, 8, 30], rows: [h(['Pot', 'Type', 'Opening', 'Now', 'Target', 'Interest earned', 'ISA']), ...S.pots.map(p => [p.name, POT_KINDS[p.kind] || '', g(+p.opening || 0), g(B.pot[p.id]), p.target ? g(+p.target) : '', g(potInterest(p.id)), p.isa ? 'Yes' : '']), [],
     h(['Date', 'Pot', 'Paid in', 'Withdrawn', 'Note']), ...logRows('pot')] });
   sheets.push({ name: 'Goals', widths: [6, 22, 12, 12, 12, 10, 16], rows: [h(['Icon', 'Goal', 'Target', 'By', 'Saved', '%', 'This period']), ...G.map(x => [x.icon || '', x.name, g(+x.target), x.by && x.by !== '0000-00-00' ? { v: x.by, t: 'month' } : '', g(x.saved), { v: x.target ? x.saved / x.target : 0, t: 'pct' }, g(x.need)]), [],
     h(['Date', 'Goal', 'Paid in', 'Withdrawn', 'Note']), ...logRows('goal')] });
@@ -796,7 +804,7 @@ document.addEventListener('click', async e => {
   if (d.act === 'checkin') { logMode = 'spend'; spendType = 'everyday'; logEdit = null; location.hash = '#log'; return render(); }
   if (d.mode) { logMode = d.mode; return render(); }
   if (d.stype) { spendType = d.stype; return render(); }
-  if (d.kind) { logKind = d.kind; if (logKind.startsWith('debt:')) logDir = 'in'; else if (logDir === 'value' && logKind !== 'invest') logDir = 'in'; return render(); }
+  if (d.kind) { logKind = d.kind; if (logKind.startsWith('debt:')) logDir = 'in'; else if ((logDir === 'value' && logKind !== 'invest') || (['interest', 'balance'].includes(logDir) && !logKind.startsWith('pot:'))) logDir = 'in'; return render(); }
   if (d.dir) { logDir = d.dir; return render(); }
   if (d.act === 'cancelEdit') { logEdit = null; return render(); }
   if (d.leftover) {
@@ -817,6 +825,16 @@ document.addEventListener('click', async e => {
   }
   if (d.act === 'saveLog') {
     const amt = +$('#fAmt').value, date = $('#fDate').value;
+    if (logDir === 'balance') {       // work out the difference from what Stratrix has on that date
+      if ($('#fAmt').value === '' || !(amt >= 0) || !date) { toast('Enter the balance and a date.'); return $('#fAmt').focus(); }
+      const ref = logKind.slice(4), p = S.pots.find(x => x.id === ref);
+      const had = Math.round((Number(p.opening || 0) + logged(S, 'pot', ref, p.asAt, addD(date, 1))) * 100) / 100, diff = Math.round((amt - had) * 100) / 100;
+      if (Math.abs(diff) < 0.005) { logDir = 'in'; render(); return toast('Already matches. Nothing to log.'); }
+      const prev = clone(S);
+      S.logs.push(diff > 0 ? { id: uid('l'), kind: 'pot', ref, dir: 'in', interest: true, amt: diff, date, note: 'From balance update' } : { id: uid('l'), kind: 'pot', ref, dir: 'out', amt: -diff, date, note: 'Balance update: money out not logged' });
+      logDir = 'in';
+      return commit(diff > 0 ? `${gbp(diff)} interest logged` : `${gbp(-diff)} logged as money out`, prev);
+    }
     if (!(amt > 0) || !date) { toast('Enter an amount and a date.'); return $('#fAmt').focus(); }
     const prev = clone(S);
     if (logDir === 'value') {
@@ -824,14 +842,14 @@ document.addEventListener('click', async e => {
       else S.investValues.push({ id: uid('v'), date, value: amt });
     } else {
       const [kind, ref] = logKind.includes(':') ? logKind.split(':') : [logKind, null];
-      const entry = { kind, ref, goal: kind === 'goal' ? ref : null, dir: logDir === 'out' ? 'out' : 'in', amt, date, note: ($('#fNote')?.value || '').trim() };
+      const entry = { kind, ref, goal: kind === 'goal' ? ref : null, dir: logDir === 'out' ? 'out' : 'in', interest: logDir === 'interest' && kind === 'pot' ? true : undefined, amt, date, note: ($('#fNote')?.value || '').trim() };
       if (logEdit && logEdit.type === 'log') Object.assign(S.logs.find(l => l.id === logEdit.id), entry);
       else S.logs.push({ id: uid('l'), ...entry });
     }
     const was = logEdit; logEdit = null;
     return commit(was ? 'Entry updated' : `Logged ${gbp(amt)}`, prev);
   }
-  if (d.edit) { const l = S.logs.find(x => x.id === d.edit); logEdit = { ...l, type: 'log' }; logMode = 'pay'; logKind = l.kind === 'invest' ? 'invest' : l.kind + ':' + (l.ref || l.goal); logDir = l.dir; render(); return scrollTo(0, 0); }
+  if (d.edit) { const l = S.logs.find(x => x.id === d.edit); logEdit = { ...l, type: 'log' }; logMode = 'pay'; logKind = l.kind === 'invest' ? 'invest' : l.kind + ':' + (l.ref || l.goal); logDir = l.interest ? 'interest' : l.dir; render(); return scrollTo(0, 0); }
   if (d.editSpend) { const s = S.spend.find(x => x.id === d.editSpend); logEdit = { ...s, type: 'spend' }; logMode = 'spend'; spendType = s.type || 'everyday'; render(); return scrollTo(0, 0); }
   if (d.editValue) { const v = S.investValues.find(x => x.id === d.editValue); logEdit = { ...v, type: 'value' }; logMode = 'pay'; logKind = 'invest'; logDir = 'value'; render(); return scrollTo(0, 0); }
   if (d.del) { const prev = clone(S); S.logs = S.logs.filter(l => l.id !== d.del); return commit('Entry deleted', prev); }

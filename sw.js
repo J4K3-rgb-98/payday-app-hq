@@ -1,6 +1,6 @@
 // Keeps Stratrix working offline. Bump VERSION whenever index.html changes.
 // Caches are shared with other apps on the same web address, so only Stratrix's own caches are ever cleared.
-const VERSION = 'stratrix-v4';
+const VERSION = 'stratrix-v5';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES))); self.skipWaiting(); });
 self.addEventListener('activate', e => {
