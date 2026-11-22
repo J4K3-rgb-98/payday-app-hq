@@ -547,6 +547,9 @@ const XL = (() => {
 const STORE_KEY = 'stratrix-state', THEME_KEY = 'stratrix-theme';
 // Saved data carries a version number. Each step below upgrades data from one version to the next, so updates never break old data or backups.
 const DATA_VERSION = 3;
+// The app's version, shown in Manage. Bump it (and VERSION in sw.js) with every release, and add a line to WHATS_NEW.
+const APP_VERSION = '3.1.1';
+const WHATS_NEW = 'Version number shown in Manage, and a message when the app updates.';
 const MIGRATIONS = {
   // 1 -> 2: Payday HQ data (version 1) brought into Stratrix. Nothing to reshape.
   1: o => o,
@@ -644,6 +647,13 @@ function connect() {
   storageMode = 'device';
   try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) { }
   recalc(); milestones(true); render();
+  // tell people when an update has arrived (not on a brand-new install)
+  // kept in its own key so restoring a backup or starting again doesn't trigger the message
+  try {
+    const seen = localStorage.getItem('stratrix-version');
+    localStorage.setItem('stratrix-version', APP_VERSION);
+    if (seen !== APP_VERSION && !(seen == null && S.blank)) toast(`Updated to version ${APP_VERSION}. ${WHATS_NEW}`, null, 7000);
+  } catch (e) { }
 }
 
 // ----- calculations -----
@@ -1023,7 +1033,7 @@ function viewManage() {
     <p class="label" style="margin-top:16px">Start again</p>
     <p class="muted small">Deletes everything in Stratrix on this phone and takes you back to the welcome screen. Download a backup first if you might want it back. Other apps aren’t affected.</p>
     <div class="actions left"><button class="btn ghost danger" data-act="startAgain">${armed ? 'Tap again to delete everything' : 'Start again'}</button></div></details>
-  <p class="muted small center">Stratrix helps you plan and track. It isn’t financial advice.</p>`;
+  <p class="muted small center">Stratrix version ${APP_VERSION}<br>Stratrix helps you plan and track. It isn’t financial advice.</p>`;
 }
 
 // ----- charts -----
